@@ -1,8 +1,7 @@
+from flask import Flask, render_template_string
 import yfinance as yf
-import time
-from datetime import datetime
 
-alerted = {}
+app = Flask(__name__)
 
 targets = {
     "AAPL": {"upper": 400, "lower": 200},
@@ -12,51 +11,78 @@ targets = {
     "TSLA": {"upper": 400, "lower": 250}
 }
 
-while True:
-    now = datetime.now()
-    weekday = now.weekday()
+HTML = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Stock Monitor</title>
+    <style>
+        body { font-family: Arial; background: #111; color: #fff; }
+        table { border-collapse: collapse; width: 60%; margin: auto; }
+        th, td { padding: 10px; text-align: center; }
+        th { background: #333; }
+        tr:nth-child(even) { background: #222; }
+        .green { color: #00ff88; }
+        .red { color: #ff4d4d; }
+        .yellow { color: #ffd700; }
+    </style>
+</head>
+<body>
+    <h1 style="text-align:center;">📈 Stock Monitor</h1>
+    <table border="1">
+        <tr>
+            <th>Ticker</th>
+            <th>Price</th>
+            <th>Range</th>
+            <th>Status</th>
+        </tr>
+        {% for stock in stocks %}
+        <tr>
+            <td>{{ stock.ticker }}</td>
+            <td>{{ stock.price }}</td>
+            <td>{{ stock.lower }} - {{ stock.upper }}</td>
+            <td class="{{ stock.color }}">{{ stock.status }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
+"""
 
-    print(f"\n⏰ {now.strftime('%Y-%m-%d %H:%M:%S')}")
+@app.route("/")
+def home():
+    stocks_data = []
 
-    if weekday < 5:
-        print("Running check...")
+    for ticker, levels in targets.items():
+        stock = yf.Ticker(ticker)
+        data = stock.history(period="1d")
 
-        for ticker, levels in targets.items():
-            print("Checking:", ticker)
+        if data.empty:
+            continue
 
-            stock = yf.Ticker(ticker)
+        price = round(data["Close"].iloc[-1], 2)
 
-            try:
-                data = stock.history(period="5d")
-            except Exception as e:
-                print(f"{ticker}: ERROR - {e}")
-                continue
+        if price > levels["upper"]:
+            status = "ABOVE"
+            color = "green"
+        elif price < levels["lower"]:
+            status = "BELOW"
+            color = "red"
+        else:
+            status = "IN RANGE"
+            color = "yellow"
 
-            if data.empty:
-                print(f"{ticker}: ❌ No data")
-                continue
+        stocks_data.append({
+            "ticker": ticker,
+            "price": price,
+            "upper": levels["upper"],
+            "lower": levels["lower"],
+            "status": status,
+            "color": color
+        })
 
-            price = data["Close"].iloc[-1]
+    return render_template_string(HTML, stocks=stocks_data)
 
-            print(f"{ticker}: ${price:.2f} | Range: {levels['lower']} - {levels['upper']}")
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
 
-            if ticker not in alerted:
-                alerted[ticker] = None
-
-            if price > levels["upper"] and alerted[ticker] != "upper":
-                print(f"🚨 {ticker} ABOVE {levels['upper']}")
-                alerted[ticker] = "upper"
-
-            elif price < levels["lower"] and alerted[ticker] != "lower":
-                print(f"📉 {ticker} BELOW {levels['lower']}")
-                alerted[ticker] = "lower"
-
-            else:
-                if levels["lower"] < price < levels["upper"]:
-                    alerted[ticker] = None
-
-    else:
-        print("Weekend — skipping checks")
-
-    print("----- next check in 30 minutes -----")
-    time.sleep(1800)
