@@ -1,8 +1,21 @@
-from flask import Flask, render_template_string
 import yfinance as yf
+import time
+import threading
+import os
+from datetime import datetime
+import pytz
+from flask import Flask
 
 app = Flask(__name__)
 
+# Track alert state
+alerted = {}
+
+# Store latest data for web display
+latest_data = {}
+last_check = "Never"
+
+# Stock targets
 targets = {
     "AAPL": {"upper": 400, "lower": 200},
     "MSFT": {"upper": 400, "lower": 300},
@@ -11,81 +24,109 @@ targets = {
     "TSLA": {"upper": 400, "lower": 250}
 }
 
-HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Stock Monitor</title>
-    <style>
-        body { font-family: Arial; background: #111; color: #fff; }
-        table { border-collapse: collapse; width: 60%; margin: auto; }
-        th, td { padding: 10px; text-align: center; }
-        th { background: #333; }
-        tr:nth-child(even) { background: #222; }
-        .green { color: #00ff88; }
-        .red { color: #ff4d4d; }
-        .yellow { color: #ffd700; }
-    </style>
-</head>
-<body>
-    <h1 style="text-align:center;">📈 Stock Monitor</h1>
-    <table border="1">
-        <tr>
-            <th>Ticker</th>
-            <th>Price</th>
-            <th>Range</th>
-            <th>Status</th>
-        </tr>
-        {% for stock in stocks %}
-        <tr>
-            <td>{{ stock.ticker }}</td>
-            <td>{{ stock.price }}</td>
-            <td>{{ stock.lower }} - {{ stock.upper }}</td>
-            <td class="{{ stock.color }}">{{ stock.status }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-</body>
-</html>
-"""
+# Timezone (US market)
+est = pytz.timezone("US/Eastern")
+
+
+def check_stocks():
+    global last_check, latest_data
+
+    while True:
+        now_est = datetime.now(est)
+        weekday = now_est.weekday()
+
+        print(f"\n⏰ {now_est}")
+
+        # Only run Mon–Fri, 9:30–16:00 EST
+        if weekday < 5 and (9 <= now_est.hour < 16 or (now_est.hour == 9 and now_est.minute >= 30)):
+            print("Market open — checking stocks")
+
+            for ticker, levels in targets.items():
+                try:
+                    stock = yf.Ticker(ticker)
+                    data = stock.history(period="1d")
+
+                    if data.empty:
+                        print(f"{ticker}: ❌ No data")
+                        continue
+
+                    price = data["Close"].iloc[-1]
+
+                    latest_data[ticker] = {
+                        "price": round(price, 2),
+                        "upper": levels["upper"],
+                        "lower": levels["lower"],
+                        "status": "IN RANGE"
+                    }
+
+                    print(f"{ticker}: {price}")
+
+                    if ticker not in alerted:
+                        alerted[ticker] = None
+
+                    if price > levels["upper"] and alerted[ticker] != "upper":
+                        print(f"🚨 {ticker} ABOVE {levels['upper']}")
+                        alerted[ticker] = "upper"
+                        latest_data[ticker]["status"] = "ABOVE 🚨"
+
+                    elif price < levels["lower"] and alerted[ticker] != "lower":
+                        print(f"📉 {ticker} BELOW {levels['lower']}")
+                        alerted[ticker] = "lower"
+                        latest_data[ticker]["status"] = "BELOW 📉"
+
+                    else:
+                        if levels["lower"] < price < levels["upper"]:
+                            alerted[ticker] = None
+                            latest_data[ticker]["status"] = "IN RANGE"
+
+                except Exception as e:
+                    print(f"{ticker}: ERROR - {e}")
+
+            last_check = now_est.strftime("%Y-%m-%d %H:%M:%S")
+
+        else:
+            print("Market closed — skipping")
+
+        print("----- next check in 30 minutes -----")
+        time.sleep(1800)
+
 
 @app.route("/")
 def home():
-    stocks_data = []
+    html = f"<h1>📈 Stock Monitor</h1>"
+    html += f"<p>Last Check (EST): {last_check}</p>"
+    html += "<table border='1' cellpadding='10'><tr><th>Ticker</th><th>Price</th><th>Range</th><th>Status</th></tr>"
 
-    for ticker, levels in targets.items():
-        stock = yf.Ticker(ticker)
-        data = stock.history(period="1d")
-
-        if data.empty:
-            continue
-
-        price = round(data["Close"].iloc[-1], 2)
-
-        if price > levels["upper"]:
-            status = "ABOVE"
-            color = "green"
-        elif price < levels["lower"]:
-            status = "BELOW"
+    for ticker, data in latest_data.items():
+        color = "black"
+        if "ABOVE" in data["status"]:
             color = "red"
-        else:
-            status = "IN RANGE"
-            color = "yellow"
+        elif "BELOW" in data["status"]:
+            color = "orange"
+        elif "IN RANGE" in data["status"]:
+            color = "green"
 
-        stocks_data.append({
-            "ticker": ticker,
-            "price": price,
-            "upper": levels["upper"],
-            "lower": levels["lower"],
-            "status": status,
-            "color": color
-        })
+        html += f"""
+        <tr>
+            <td>{ticker}</td>
+            <td>{data['price']}</td>
+            <td>{data['lower']} - {data['upper']}</td>
+            <td style='color:{color}'>{data['status']}</td>
+        </tr>
+        """
 
-    return render_template_string(HTML, stocks=stocks_data)
+    html += "</table>"
+    return html
+
 
 if __name__ == "__main__":
-    import os
+    # Start background thread
+    thread = threading.Thread(target=check_stocks)
+    thread.daemon = True
+    thread.start()
 
-port = int(os.environ.get("PORT", 5000))
-app.run(host="0.0.0.0", port=port)
+    # Run Flask app
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
+
 
