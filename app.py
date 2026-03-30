@@ -45,7 +45,7 @@ def check_stocks():
 
 
 # START BACKGROUND THREAD
-threading.Thread(target=check_stocks, daemon=True).start()
+
 
 
 @app.route("/")
@@ -73,4 +73,9 @@ def dashboard():
 
 
 if __name__ == "__main__":
+    # START BACKGROUND THREAD HERE (not above)
+    thread = threading.Thread(target=check_stocks)
+    thread.daemon = True
+    thread.start()
+
     app.run(host="0.0.0.0", port=8080)
